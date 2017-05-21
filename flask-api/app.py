@@ -11,9 +11,9 @@ from flask_cors import CORS
 from flask_restful import Resource, reqparse
 from flask_restful_swagger_2 import Api, swagger, Schema
 
-from neo4j.v1 import GraphDatabase, basic_auth, ResultError
+from neo4j.v1 import GraphDatabase, basic_auth
 
-from . import config
+#from . import config
 
 
 app = Flask(__name__)
@@ -22,7 +22,9 @@ api = Api(app, title='Neo4j Movie Demo API', api_version='0.0.10')
 CORS(app)
 
 
-driver = GraphDatabase.driver('bolt://localhost', auth=basic_auth(config.DATABASE_USERNAME, str(config.DATABASE_PASSWORD)))
+#driver = GraphDatabase.driver('bolt://localhost', auth=basic_auth(config.DATABASE_USERNAME, str(config.DATABASE_PASSWORD)))
+driver = GraphDatabase.driver('bolt://localhost', encrypted=False)
+
 
 
 def get_db():
@@ -34,7 +36,10 @@ def get_db():
 @app.teardown_appcontext
 def close_db(error):
     if hasattr(g, 'neo4j_db'):
-        g.neo4j_db.close()
+        try:
+            g.neo4j_db.close()
+        except:
+            return
 
 
 def set_user(sender, **extra):
@@ -54,9 +59,9 @@ def set_user(sender, **extra):
             MATCH (user:User {api_key: {api_key}}) RETURN user
             ''', {'api_key': token}
     )
-    try:
-        g.user = results.single()['user']
-    except ResultError:
+    # mfk ResultError no longer used in latest driver try/except changed to check for none
+    g.user = results.single()['user']
+    if not g.user:
         abort(401, 'invalid authorization key')
         return
 request_started.connect(set_user, app)
@@ -412,7 +417,8 @@ class MovieListByDateRange(Resource):
     def get(self, start, end):
         db = get_db()
         try:
-            params = {'start': long(start), 'end': long(end)}
+            # mfk removed long not required for pythong 3.x
+            params = {'start': start, 'end': end}
         except ValueError:
             return {'description': 'invalid year format'}, 400
         result = db.run(
@@ -819,9 +825,8 @@ class Register(Resource):
             MATCH (user:User {username: {username}}) RETURN user
             ''', {'username': username}
         )
-        try:
-            results.single()
-        except ResultError:
+        # mfk replaced ResultError with exists test
+        if not results.single():
             pass
         else:
             return {'username': 'username already in use'}, 400
@@ -887,9 +892,9 @@ class Login(Resource):
             MATCH (user:User {username: {username}}) RETURN user
             ''', {'username': username}
         )
-        try:
-            user = results.single()['user']
-        except ResultError:
+        # replaced ResultError try block
+        user = results.single()['user']
+        if not user:
             return {'username': 'username does not exist'}, 400
 
         expected_password = hash_password(user['username'], password)
@@ -1043,3 +1048,5 @@ api.add_resource(PersonBacon, '/api/v0/people/bacon')
 api.add_resource(Register, '/api/v0/register')
 api.add_resource(Login, '/api/v0/login')
 api.add_resource(UserMe, '/api/v0/users/me')
+
+app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
